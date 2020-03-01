@@ -5,12 +5,7 @@ voxelFolder.ChildRemoved.Connect((removedVoxel) => {
     if (removedVoxel.IsA('BasePart')) {
         const voxel = Voxel.getVoxel(removedVoxel.Position);
         if (voxel) {
-            Voxel.setVoxel(voxel.position, undefined);
-            voxel.getNeighbors().forEach((neighbor) => {
-                if (neighbor) {
-                    neighbor.calculateLoad();
-                }
-            });
+            VoxelPhysicsHelepr.voxelRemoved(voxel);
         }
     }
 });
@@ -19,8 +14,6 @@ const TweenService = game.GetService('TweenService');
 
 export class Voxel {
     static readonly SIZE = 1;
-
-    static readonly SIDE_STRENGTH = 2;
 
     static readonly UP: Vector3 = new Vector3(0, 1, 0);
     static readonly DOWN: Vector3 = new Vector3(0, -1, 0);
@@ -52,11 +45,8 @@ export class Voxel {
         this.voxels[x][y][z] = voxel;
     }
 
-    public readonly part: Part;
-    public readonly baseLevel: boolean;
-    protected baseSupported: boolean;
-
-    private load: number = 0;
+    public readonly physicsData: VoxelPhysicsData;
+    private part: Part | undefined;
 
     constructor(public readonly position: Vector3) {
         this.part = new Instance('Part');
@@ -67,12 +57,7 @@ export class Voxel {
         this.part.Color = new Color3(110, 110, 110);
         this.part.Parent = voxelFolder;
 
-        this.baseLevel = !!game.Workspace.FindPartOnRayWithWhitelist(
-            new Ray(position, new Vector3(0, -(Voxel.SIZE / 2 + 0.1), 0)),
-            [ game.Workspace.FindFirstChild('Baseplate') as BasePart ]
-        )[0];
-        this.baseSupported = this.baseLevel;
-        this.calculateLoad();
+        this.physicsData = VoxelPhysicsHelepr.getInitialVoxelPhysicsData(this);
 
         Voxel.setVoxel(position, this);
     }
@@ -81,31 +66,12 @@ export class Voxel {
         return Voxel.NEIGHBORS.mapFiltered((direction) => Voxel.getVoxel(this.position.add(direction)));
     }
 
-    public calculateLoad(): number {
-        if (this.baseLevel) {
-            this.load = 0;
-        }
-        else {
-            const downNeighbor = Voxel.getVoxel(this.position.add(Voxel.DOWN));
-            if (downNeighbor && downNeighbor.baseSupported) {
-                this.baseSupported = true;
-                this.load = 0;
-            }
-            else {
-                this.baseSupported = false;
-                this.break();
-                this.load = 1;
-            }
-        }
+    public destroy(): void {
+        if (!this.part) return;
 
-        print(this.load);
-
-        return this.load;
-    }
-
-    public break(): void {
         const clonedPart = this.part.Clone();
         this.part.Destroy();
+        this.part = undefined;
         clonedPart.Anchored = false;
         TweenService.Create(clonedPart, new TweenInfo(6, Enum.EasingStyle.Linear, Enum.EasingDirection.In), {
             Transparency: 1
@@ -114,6 +80,63 @@ export class Voxel {
         coroutine.wrap(() => {
             wait(6);
             clonedPart.Destroy();
+            Voxel.setVoxel(this.position, undefined);
         })();
+    }
+}
+
+export interface VoxelPhysicsData {
+    baseLevel: boolean;
+    baseSupported: boolean;
+    load: number;
+
+    voxelPath: Voxel[];
+    dependantVoxels: Voxel[];
+}
+
+export class VoxelPhysicsHelepr {
+    public static getInitialVoxelPhysicsData(voxel: Voxel): VoxelPhysicsData {
+        const raycastResult = !!game.Workspace.FindPartOnRayWithWhitelist(
+            new Ray(voxel.position, new Vector3(0, -(Voxel.SIZE / 2 + 0.1), 0)),
+            [ game.Workspace.FindFirstChild('Baseplate') as BasePart ]
+        )[0];
+        return {
+            baseLevel: raycastResult,
+            baseSupported: raycastResult,
+            load: 0,
+            voxelPath: [],
+            dependantVoxels: []
+        };
+    }
+
+    public static voxelRemoved(voxel: Voxel): void {
+        Voxel.setVoxel(voxel.position, undefined);
+        // Recalculate for all voxels that dependend on this voxel
+        voxel.getNeighbors().forEach((neighbor) => {
+            if (neighbor) {
+                VoxelPhysicsHelepr.calculateVoxelPhysics(neighbor);
+            }
+        });
+    }
+
+    public static calculateVoxelPhysics(voxel: Voxel): void {
+        const pData: VoxelPhysicsData = voxel.physicsData;
+        if (pData.baseLevel) {
+            pData.load = 0;
+        }
+        else {
+            const downNeighbor = Voxel.getVoxel(voxel.position.add(Voxel.DOWN));
+            if (downNeighbor && downNeighbor.physicsData.baseSupported) {
+                pData.baseSupported = true;
+                pData.load = 0;
+            }
+            else {
+                pData.baseSupported = false;
+                voxel.destroy();
+                pData.load = 1;
+            }
+        }
+
+        print(pData.load);
     }
 }
