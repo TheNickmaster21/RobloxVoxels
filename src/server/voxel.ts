@@ -125,7 +125,7 @@ export interface VoxelPhysicsData {
 }
 
 export class VoxelPhysicsHelper {
-    public static readonly MAX_LOAD = 3;
+    public static readonly MAX_LOAD = 5;
 
     public static getInitialVoxelPhysicsData(voxel: Voxel): VoxelPhysicsData {
         const raycastResult = !!game.Workspace.FindPartOnRayWithWhitelist(
@@ -156,18 +156,19 @@ export class VoxelPhysicsHelper {
             pData.load = 0;
         }
         else {
-            const voxelPath = VoxelPhysicsHelper.calculateVoxelPath(voxel);
-            print('path', voxelPath && voxelPath.size());
-            if (voxelPath) {
-                voxel.increaseLoad();
-                let lastPathVoxel = voxel;
-                voxelPath.forEach((pathVoxel: Voxel) => {
-                    const direction = lastPathVoxel.position.sub(pathVoxel.position);
-                    if (direction !== Voxel.DOWN) {
-                        voxel.increaseLoad();
-                    }
-                    lastPathVoxel = pathVoxel;
-                });
+            const voxelPathResult = VoxelPhysicsHelper.calculateVoxelPath(voxel);
+            if (voxelPathResult) {
+                const voxelPath = voxelPathResult[0];
+                let pathSize = 0;
+
+                let lastPathVoxel: Voxel | undefined = voxelPathResult[1];
+
+                do {
+                    lastPathVoxel.increaseLoad();
+                    pathSize++;
+                    lastPathVoxel = voxelPath.get(lastPathVoxel);
+                } while (lastPathVoxel !== undefined && lastPathVoxel !== voxel);
+                print(pathSize);
             }
             else {
                 //TODO Optimize clearing all voxels that were not able to be held
@@ -178,7 +179,7 @@ export class VoxelPhysicsHelper {
         print('load', pData.load);
     }
 
-    private static calculateVoxelPath(voxel: Voxel): Voxel[] | undefined {
+    private static calculateVoxelPath(voxel: Voxel): [Map<Voxel, Voxel>, Voxel] | undefined {
         const frontier = new PriorityQueue<Voxel>();
         const cameFrom = new Map<Voxel, Voxel>();
         const costSoFar = new Map<Voxel, number>();
@@ -186,23 +187,30 @@ export class VoxelPhysicsHelper {
         frontier.insert(voxel, 0);
         costSoFar.set(voxel, 0);
 
+        let destination: Voxel | undefined;
+
         while (frontier.size() > 0) {
             const current = frontier.pop();
-            if (current === undefined || current.physicsData.baseLevel) break;
-
+            if (current === undefined || current.physicsData.baseLevel) {
+                destination = current;
+                break;
+            }
+            print(current.position.X, current.position.Y, current.position.Z, current.physicsData.baseLevel);
+            const currentCost = costSoFar.get(current);
             current.getNeighbors().forEach((neighbor) => {
                 const movementCost = 1; //current.position.sub(neighbor.position) === Voxel.UP ? 0 : 1; // neighbor.physicsData.load;
-                const currentCost = costSoFar.get(neighbor);
+                const currentNeighborCost = costSoFar.get(neighbor);
                 const newCost = movementCost + (currentCost !== undefined ? currentCost : 0);
-                print(neighbor, currentCost, newCost, currentCost === undefined || newCost < currentCost);
-                if (currentCost === undefined || newCost < currentCost) {
+                print(neighbor.position.X, neighbor.position.Y, neighbor.position.Z, currentNeighborCost, newCost);
+                if (currentNeighborCost === undefined || newCost < currentNeighborCost) {
                     costSoFar.set(neighbor, newCost);
-                    const priority = newCost - neighbor.position.Y;
+                    const priority = newCost + neighbor.position.Y;
+                    print('inserted in frontier', priority);
                     frontier.insert(neighbor, priority);
                     cameFrom.set(neighbor, current);
                 }
             });
         }
-        return cameFrom.values();
+        if (destination) return [ cameFrom, destination ];
     }
 }

@@ -2,7 +2,7 @@ import { Voxel, VoxelPhysicsHelper } from './voxel';
 
 //print(makeHello("main.server.ts"));
 
-const size = 7;
+const size = 6;
 
 function iterateTest(func: (vector3: Vector3) => void): void {
     for (let x = 0; x < size; x++) {
@@ -15,4 +15,7 @@ function iterateTest(func: (vector3: Vector3) => void): void {
 }
 
 iterateTest((v) => new Voxel(v));
-iterateTest((v) => VoxelPhysicsHelper.calculateVoxelPhysics(Voxel.getVoxel(v)!));
+iterateTest(
+    (v) =>
+        Voxel.getVoxel(v) !== undefined ? VoxelPhysicsHelper.calculateVoxelPhysics(Voxel.getVoxel(v)!) : print('hmm')
+);
