@@ -1,3 +1,5 @@
+import { PriorityQueue } from 'shared/priority-queue';
+
 const voxelFolder = new Instance('Folder');
 voxelFolder.Name = 'Voxels';
 voxelFolder.Parent = game.Workspace;
@@ -5,7 +7,7 @@ voxelFolder.ChildRemoved.Connect((removedVoxel) => {
     if (removedVoxel.IsA('BasePart')) {
         const voxel = Voxel.getVoxel(removedVoxel.Position);
         if (voxel) {
-            VoxelPhysicsHelepr.voxelRemoved(voxel);
+            VoxelPhysicsHelper.voxelRemoved(voxel);
         }
     }
 });
@@ -46,7 +48,8 @@ export class Voxel {
     }
 
     public readonly physicsData: VoxelPhysicsData;
-    private part: Part | undefined;
+    private part: Part;
+    private destroyed: boolean = false;
 
     constructor(public readonly position: Vector3) {
         this.part = new Instance('Part');
@@ -54,24 +57,27 @@ export class Voxel {
         this.part.Anchored = true;
         this.part.Size = new Vector3(Voxel.SIZE, Voxel.SIZE, Voxel.SIZE);
         this.part.Position = position;
-        this.part.Color = new Color3(110, 110, 110);
+        this.part.Color = new Color3(1, 1, 1);
         this.part.Parent = voxelFolder;
 
-        this.physicsData = VoxelPhysicsHelepr.getInitialVoxelPhysicsData(this);
+        this.physicsData = VoxelPhysicsHelper.getInitialVoxelPhysicsData(this);
 
         Voxel.setVoxel(position, this);
     }
 
     public getNeighbors(): Voxel[] {
-        return Voxel.NEIGHBORS.mapFiltered((direction) => Voxel.getVoxel(this.position.add(direction)));
+        return Voxel.NEIGHBORS
+            .mapFiltered((direction) => Voxel.getVoxel(this.position.add(direction)))
+            .filter((voxel) => !voxel.isDestroyed());
     }
 
     public destroy(): void {
-        if (!this.part) return;
-
+        if (this.destroyed) return;
+        this.destroyed = true;
+        // TODO Calculate physics for all voxels that relied on this voxel
+        this.setColor(new Color3(0, 0, 0));
         const clonedPart = this.part.Clone();
         this.part.Destroy();
-        this.part = undefined;
         clonedPart.Anchored = false;
         TweenService.Create(clonedPart, new TweenInfo(6, Enum.EasingStyle.Linear, Enum.EasingDirection.In), {
             Transparency: 1
@@ -83,18 +89,44 @@ export class Voxel {
             Voxel.setVoxel(this.position, undefined);
         })();
     }
+
+    private setColor(color: Color3): void {
+        if (this.part) {
+            this.part.Color = color;
+        }
+    }
+
+    public increaseLoad(): void {
+        this.physicsData.load++;
+        const ratio = this.physicsData.load / VoxelPhysicsHelper.MAX_LOAD;
+        this.setColor(new Color3(1 - ratio, ratio, 0));
+        if (this.physicsData.load > VoxelPhysicsHelper.MAX_LOAD) {
+            this.destroy();
+        }
+    }
+
+    public decreaseLoad(): void {
+        this.physicsData.load--;
+        const ratio = this.physicsData.load / VoxelPhysicsHelper.MAX_LOAD;
+        this.setColor(new Color3(1 - ratio, ratio, 0));
+    }
+
+    public isDestroyed(): boolean {
+        return this.destroyed;
+    }
 }
 
 export interface VoxelPhysicsData {
     baseLevel: boolean;
-    baseSupported: boolean;
     load: number;
 
     voxelPath: Voxel[];
     dependantVoxels: Voxel[];
 }
 
-export class VoxelPhysicsHelepr {
+export class VoxelPhysicsHelper {
+    public static readonly MAX_LOAD = 3;
+
     public static getInitialVoxelPhysicsData(voxel: Voxel): VoxelPhysicsData {
         const raycastResult = !!game.Workspace.FindPartOnRayWithWhitelist(
             new Ray(voxel.position, new Vector3(0, -(Voxel.SIZE / 2 + 0.1), 0)),
@@ -102,7 +134,6 @@ export class VoxelPhysicsHelepr {
         )[0];
         return {
             baseLevel: raycastResult,
-            baseSupported: raycastResult,
             load: 0,
             voxelPath: [],
             dependantVoxels: []
@@ -113,30 +144,65 @@ export class VoxelPhysicsHelepr {
         Voxel.setVoxel(voxel.position, undefined);
         // Recalculate for all voxels that dependend on this voxel
         voxel.getNeighbors().forEach((neighbor) => {
-            if (neighbor) {
-                VoxelPhysicsHelepr.calculateVoxelPhysics(neighbor);
-            }
+            VoxelPhysicsHelper.calculateVoxelPhysics(neighbor);
         });
     }
 
     public static calculateVoxelPhysics(voxel: Voxel): void {
+        if (voxel.isDestroyed()) return;
+
         const pData: VoxelPhysicsData = voxel.physicsData;
         if (pData.baseLevel) {
             pData.load = 0;
         }
         else {
-            const downNeighbor = Voxel.getVoxel(voxel.position.add(Voxel.DOWN));
-            if (downNeighbor && downNeighbor.physicsData.baseSupported) {
-                pData.baseSupported = true;
-                pData.load = 0;
+            const voxelPath = VoxelPhysicsHelper.calculateVoxelPath(voxel);
+            print('path', voxelPath && voxelPath.size());
+            if (voxelPath) {
+                voxel.increaseLoad();
+                let lastPathVoxel = voxel;
+                voxelPath.forEach((pathVoxel: Voxel) => {
+                    const direction = lastPathVoxel.position.sub(pathVoxel.position);
+                    if (direction !== Voxel.DOWN) {
+                        voxel.increaseLoad();
+                    }
+                    lastPathVoxel = pathVoxel;
+                });
             }
             else {
-                pData.baseSupported = false;
+                //TODO Optimize clearing all voxels that were not able to be held
                 voxel.destroy();
-                pData.load = 1;
             }
         }
 
-        print(pData.load);
+        print('load', pData.load);
+    }
+
+    private static calculateVoxelPath(voxel: Voxel): Voxel[] | undefined {
+        const frontier = new PriorityQueue<Voxel>();
+        const cameFrom = new Map<Voxel, Voxel>();
+        const costSoFar = new Map<Voxel, number>();
+
+        frontier.insert(voxel, 0);
+        costSoFar.set(voxel, 0);
+
+        while (frontier.size() > 0) {
+            const current = frontier.pop();
+            if (current === undefined || current.physicsData.baseLevel) break;
+
+            current.getNeighbors().forEach((neighbor) => {
+                const movementCost = 1; //current.position.sub(neighbor.position) === Voxel.UP ? 0 : 1; // neighbor.physicsData.load;
+                const currentCost = costSoFar.get(neighbor);
+                const newCost = movementCost + (currentCost !== undefined ? currentCost : 0);
+                print(neighbor, currentCost, newCost, currentCost === undefined || newCost < currentCost);
+                if (currentCost === undefined || newCost < currentCost) {
+                    costSoFar.set(neighbor, newCost);
+                    const priority = newCost - neighbor.position.Y;
+                    frontier.insert(neighbor, priority);
+                    cameFrom.set(neighbor, current);
+                }
+            });
+        }
+        return cameFrom.values();
     }
 }
