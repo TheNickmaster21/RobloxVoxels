@@ -8,6 +8,7 @@ export class PriorityQueue<T> {
     insert(val: T, priority: number): void {
         if (!this.heap.size() || this.heap[this.heap.size() - 1][1] > priority) {
             this.heap.push([ val, priority ]);
+            return;
         }
 
         const tmp: Tuple<T>[] = [];
