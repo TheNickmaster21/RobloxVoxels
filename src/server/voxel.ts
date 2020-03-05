@@ -6,7 +6,8 @@ voxelFolder.Parent = game.Workspace;
 voxelFolder.ChildRemoved.Connect((removedVoxel) => {
     if (removedVoxel.IsA('BasePart')) {
         const voxel = Voxel.getVoxel(removedVoxel.Position);
-        if (voxel) {
+        if (voxel && !voxel.isDestroyed()) {
+            print(voxel.position.X, voxel.position.Y, voxel.position.Z);
             VoxelPhysicsHelper.voxelRemoved(voxel);
         }
     }
@@ -86,7 +87,6 @@ export class Voxel {
         coroutine.wrap(() => {
             wait(6);
             clonedPart.Destroy();
-            Voxel.setVoxel(this.position, undefined);
         })();
     }
 
@@ -102,9 +102,10 @@ export class Voxel {
         this.physicsData.load++;
         const ratio = this.physicsData.load / VoxelPhysicsHelper.MAX_LOAD;
         this.setColor(new Color3(ratio, 1 - ratio, 0));
-        if (this.physicsData.load > VoxelPhysicsHelper.MAX_LOAD) {
-            this.destroy();
-        }
+        // Instead, just don't let full load parts be used in path finding
+        // if (this.physicsData.load > VoxelPhysicsHelper.MAX_LOAD) {
+        //     this.destroy();
+        // }
     }
 
     public decreaseLoad(): void {
@@ -146,15 +147,15 @@ export class VoxelPhysicsHelper {
 
     public static voxelRemoved(voxel: Voxel): void {
         Voxel.setVoxel(voxel.position, undefined);
-        // Recalculate for all voxels that dependend on this voxel
+
         voxel.physicsData.voxelPath.forEach((pathVoxel: Voxel) => {
             pathVoxel.decreaseLoad();
             const index = pathVoxel.physicsData.dependantVoxels.indexOf(voxel);
-            if (index) pathVoxel.physicsData.dependantVoxels.splice(index);
+            pathVoxel.physicsData.dependantVoxels.splice(index, 1);
         });
 
-        voxel.getNeighbors().forEach((neighbor) => {
-            VoxelPhysicsHelper.calculateVoxelPhysics(neighbor);
+        voxel.physicsData.dependantVoxels.forEach((dependant) => {
+            VoxelPhysicsHelper.calculateVoxelPhysics(dependant);
         });
     }
 
@@ -167,7 +168,7 @@ export class VoxelPhysicsHelper {
         }
         else {
             // TODO Remove from dependsOn list of other voxel based on path
-            voxel.physicsData.voxelPath.forEach((pathVoxel: Voxel) => {
+            pData.voxelPath.forEach((pathVoxel: Voxel) => {
                 pathVoxel.decreaseLoad();
                 const index = pathVoxel.physicsData.dependantVoxels.indexOf(voxel);
                 if (index) pathVoxel.physicsData.dependantVoxels.splice(index);
@@ -177,17 +178,14 @@ export class VoxelPhysicsHelper {
             const voxelPathResult = VoxelPhysicsHelper.calculateVoxelPath(voxel);
             if (voxelPathResult) {
                 const voxelPath = voxelPathResult[0];
-                let pathSize = 0;
                 let lastPathVoxel: Voxel | undefined = voxelPathResult[1];
 
                 do {
-                    lastPathVoxel.increaseLoad();
                     pData.voxelPath.push(lastPathVoxel);
                     lastPathVoxel.physicsData.dependantVoxels.push(voxel);
-                    pathSize++;
+                    lastPathVoxel.increaseLoad();
                     lastPathVoxel = voxelPath.get(lastPathVoxel);
                 } while (lastPathVoxel !== undefined && lastPathVoxel !== voxel);
-                //print(pathSize);
             }
             else {
                 //TODO Optimize clearing all voxels that were not able to be held
@@ -223,6 +221,7 @@ export class VoxelPhysicsHelper {
             //);
             const currentCost = costSoFar.get(current);
             current.getNeighbors().forEach((neighbor) => {
+                if (neighbor.physicsData.load === VoxelPhysicsHelper.MAX_LOAD) return;
                 const movementCost = 1; //current.position.sub(neighbor.position) === Voxel.UP ? 0 : 1; // neighbor.physicsData.load;
                 const currentNeighborCost = costSoFar.get(neighbor);
                 const newCost = movementCost + (currentCost !== undefined ? currentCost : 0);
