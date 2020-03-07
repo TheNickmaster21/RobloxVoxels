@@ -8,7 +8,7 @@ voxelFolder.ChildRemoved.Connect((removedVoxel) => {
         const voxel = Voxel.getVoxel(removedVoxel.Position);
         if (voxel && !voxel.isDestroyed()) {
             print(voxel.position.X, voxel.position.Y, voxel.position.Z);
-            VoxelPhysicsHelper.voxelRemoved(voxel);
+            voxel.destroy();
         }
     }
 });
@@ -36,7 +36,10 @@ export class Voxel {
         const x = vector3.X;
         const y = vector3.Y;
         const z = vector3.Z;
-        return this.voxels[x] ? (this.voxels[x][y] ? this.voxels[x][y][z] : undefined) : undefined;
+        const voxel = this.voxels[x] ? (this.voxels[x][y] ? this.voxels[x][y][z] : undefined) : undefined;
+        if (voxel && !voxel.isDestroyed()) {
+            return voxel;
+        }
     }
 
     public static setVoxel(vector3: Vector3, voxel: Voxel | undefined): void {
@@ -75,7 +78,6 @@ export class Voxel {
     public destroy(): void {
         if (this.destroyed) return;
         this.destroyed = true;
-        // TODO Calculate physics for all voxels that relied on this voxel
         this.setColor(new Color3(0, 0, 0));
         const clonedPart = this.part.Clone();
         this.part.Destroy();
@@ -88,6 +90,8 @@ export class Voxel {
             wait(6);
             clonedPart.Destroy();
         })();
+
+        VoxelPhysicsHelper.voxelRemoved(this);
     }
 
     private setColor(color: Color3): void {
@@ -103,9 +107,10 @@ export class Voxel {
         const ratio = this.physicsData.load / VoxelPhysicsHelper.MAX_LOAD;
         this.setColor(new Color3(ratio, 1 - ratio, 0));
         // Instead, just don't let full load parts be used in path finding
-        // if (this.physicsData.load > VoxelPhysicsHelper.MAX_LOAD) {
-        //     this.destroy();
-        // }
+        if (this.physicsData.load > VoxelPhysicsHelper.MAX_LOAD) {
+            print('too much load');
+            this.destroy();
+        }
     }
 
     public decreaseLoad(): void {
@@ -130,7 +135,9 @@ export interface VoxelPhysicsData {
 }
 
 export class VoxelPhysicsHelper {
-    public static readonly MAX_LOAD = 7;
+    public static SETUP_DONE = false;
+
+    public static readonly MAX_LOAD = 10;
 
     public static getInitialVoxelPhysicsData(voxel: Voxel): VoxelPhysicsData {
         const raycastResult = !!game.Workspace.FindPartOnRayWithWhitelist(
@@ -146,15 +153,13 @@ export class VoxelPhysicsHelper {
     }
 
     public static voxelRemoved(voxel: Voxel): void {
-        Voxel.setVoxel(voxel.position, undefined);
-
         voxel.physicsData.voxelPath.forEach((pathVoxel: Voxel) => {
             pathVoxel.decreaseLoad();
             const index = pathVoxel.physicsData.dependantVoxels.indexOf(voxel);
             pathVoxel.physicsData.dependantVoxels.splice(index, 1);
         });
 
-        voxel.physicsData.dependantVoxels.forEach((dependant) => {
+        [ ...voxel.physicsData.dependantVoxels ].forEach((dependant) => {
             VoxelPhysicsHelper.calculateVoxelPhysics(dependant);
         });
     }
@@ -171,24 +176,25 @@ export class VoxelPhysicsHelper {
             pData.voxelPath.forEach((pathVoxel: Voxel) => {
                 pathVoxel.decreaseLoad();
                 const index = pathVoxel.physicsData.dependantVoxels.indexOf(voxel);
-                if (index) pathVoxel.physicsData.dependantVoxels.splice(index);
+                if (index) pathVoxel.physicsData.dependantVoxels.splice(index, 1);
             });
 
             pData.voxelPath = [];
             const voxelPathResult = VoxelPhysicsHelper.calculateVoxelPath(voxel);
-            if (voxelPathResult) {
-                const voxelPath = voxelPathResult[0];
-                let lastPathVoxel: Voxel | undefined = voxelPathResult[1];
+            if (voxelPathResult[0] === true) {
+                const voxelPath: Map<Voxel, Voxel> = voxelPathResult[1];
+                let lastPathVoxel: Voxel | undefined = voxelPathResult[2];
 
-                do {
+                while (lastPathVoxel !== undefined && lastPathVoxel !== voxel) {
                     pData.voxelPath.push(lastPathVoxel);
                     lastPathVoxel.physicsData.dependantVoxels.push(voxel);
                     lastPathVoxel.increaseLoad();
                     lastPathVoxel = voxelPath.get(lastPathVoxel);
-                } while (lastPathVoxel !== undefined && lastPathVoxel !== voxel);
+                }
             }
             else {
                 //TODO Optimize clearing all voxels that were not able to be held
+                print("rekt; couldn't find path");
                 voxel.destroy();
             }
         }
@@ -196,7 +202,7 @@ export class VoxelPhysicsHelper {
         //print('load', pData.load);
     }
 
-    private static calculateVoxelPath(voxel: Voxel): [Map<Voxel, Voxel>, Voxel] | undefined {
+    private static calculateVoxelPath(voxel: Voxel): [true, Map<Voxel, Voxel>, Voxel] | [false, Voxel[]] {
         const frontier = new PriorityQueue<Voxel>();
         const cameFrom = new Map<Voxel, Voxel>();
         const costSoFar = new Map<Voxel, number>();
@@ -221,8 +227,7 @@ export class VoxelPhysicsHelper {
             //);
             const currentCost = costSoFar.get(current);
             current.getNeighbors().forEach((neighbor) => {
-                if (neighbor.physicsData.load === VoxelPhysicsHelper.MAX_LOAD) return;
-                const movementCost = 1; //current.position.sub(neighbor.position) === Voxel.UP ? 0 : 1; // neighbor.physicsData.load;
+                const movementCost = 1; //current.position.sub(neighbor.position).FuzzyEq(Voxel.DOWN, 1e-2) ? 0 : 1; // neighbor.physicsData.load;
                 const currentNeighborCost = costSoFar.get(neighbor);
                 const newCost = movementCost + (currentCost !== undefined ? currentCost : 0);
                 //print(neighbor.position.X, neighbor.position.Y, neighbor.position.Z, currentNeighborCost, newCost);
@@ -234,6 +239,21 @@ export class VoxelPhysicsHelper {
                 }
             });
         }
-        if (destination) return [ cameFrom, destination ];
+        if (destination) {
+            return [ true, cameFrom, destination ];
+        }
+        else {
+            return [ false, [] ];
+        }
+    }
+
+    static printVoxelPosition(voxel: Voxel) {
+        if (VoxelPhysicsHelper.SETUP_DONE)
+            if (voxel && voxel.position) {
+                print(voxel.position.X, voxel.position.Y, voxel.position.Z);
+            }
+            else {
+                print('nil');
+            }
     }
 }
