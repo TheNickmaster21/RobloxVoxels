@@ -7,7 +7,6 @@ voxelFolder.ChildRemoved.Connect((removedVoxel) => {
     if (removedVoxel.IsA('BasePart')) {
         const voxel = Voxel.getVoxel(removedVoxel.Position);
         if (voxel && !voxel.isDestroyed()) {
-            print(voxel.position.X, voxel.position.Y, voxel.position.Z);
             voxel.destroy();
         }
     }
@@ -91,7 +90,7 @@ export class Voxel {
             clonedPart.Destroy();
         })();
 
-        VoxelPhysicsHelper.voxelRemoved(this);
+        spawn(() => VoxelPhysicsHelper.voxelRemoved(this));
     }
 
     private setColor(color: Color3): void {
@@ -100,17 +99,17 @@ export class Voxel {
         }
     }
 
-    public increaseLoad(): void {
-        if (this.physicsData.baseLevel) return;
+    public increaseLoad(): boolean {
+        if (this.physicsData.baseLevel) return true;
 
         this.physicsData.load++;
         const ratio = this.physicsData.load / VoxelPhysicsHelper.MAX_LOAD;
         this.setColor(new Color3(ratio, 1 - ratio, 0));
-        // Instead, just don't let full load parts be used in path finding
         if (this.physicsData.load > VoxelPhysicsHelper.MAX_LOAD) {
-            print('too much load');
             this.destroy();
+            return false;
         }
+        return true;
     }
 
     public decreaseLoad(): void {
@@ -172,7 +171,6 @@ export class VoxelPhysicsHelper {
             pData.load = 0;
         }
         else {
-            // TODO Remove from dependsOn list of other voxel based on path
             pData.voxelPath.forEach((pathVoxel: Voxel) => {
                 pathVoxel.decreaseLoad();
                 const index = pathVoxel.physicsData.dependantVoxels.indexOf(voxel);
@@ -185,24 +183,35 @@ export class VoxelPhysicsHelper {
                 const voxelPath: Map<Voxel, Voxel> = voxelPathResult[1];
                 let lastPathVoxel: Voxel | undefined = voxelPathResult[2];
 
+                const path: Voxel[] = [];
                 while (lastPathVoxel !== undefined && lastPathVoxel !== voxel) {
-                    pData.voxelPath.push(lastPathVoxel);
-                    lastPathVoxel.physicsData.dependantVoxels.push(voxel);
-                    lastPathVoxel.increaseLoad();
+                    path.push(lastPathVoxel);
                     lastPathVoxel = voxelPath.get(lastPathVoxel);
+                }
+
+                lastPathVoxel = undefined;
+                for (let i = 0; i < path.size(); i++) {
+                    const pathVoxel = path[i];
+                    pathVoxel.physicsData.dependantVoxels.push(voxel);
+
+                    if (!lastPathVoxel || !lastPathVoxel.position.sub(pathVoxel.position).FuzzyEq(Voxel.DOWN, 0)) {
+                        pData.voxelPath.push(pathVoxel);
+                        if (!pathVoxel.increaseLoad()) break;
+                    }
+                    lastPathVoxel = pathVoxel;
                 }
             }
             else {
-                //TODO Optimize clearing all voxels that were not able to be held
-                print("rekt; couldn't find path");
+                voxelPathResult[1].forEach((exploredVoxel) => {
+                    exploredVoxel.destroy();
+                });
                 voxel.destroy();
             }
         }
-
-        //print('load', pData.load);
     }
 
     private static calculateVoxelPath(voxel: Voxel): [true, Map<Voxel, Voxel>, Voxel] | [false, Voxel[]] {
+        const explored: Voxel[] = [];
         const frontier = new PriorityQueue<Voxel>();
         const cameFrom = new Map<Voxel, Voxel>();
         const costSoFar = new Map<Voxel, number>();
@@ -218,23 +227,20 @@ export class VoxelPhysicsHelper {
                 destination = current;
                 break;
             }
-            //print(
-            //    current.position.X,
-            //    current.position.Y,
-            //    current.position.Z,
-            //    current.physicsData.baseLevel,
-            //    frontier.size()
-            //);
+
             const currentCost = costSoFar.get(current);
             current.getNeighbors().forEach((neighbor) => {
-                const movementCost = 1; //current.position.sub(neighbor.position).FuzzyEq(Voxel.DOWN, 1e-2) ? 0 : 1; // neighbor.physicsData.load;
+                if (neighbor.physicsData.load >= VoxelPhysicsHelper.MAX_LOAD) return;
+                const movementCost = current.position.sub(neighbor.position).FuzzyEq(Voxel.DOWN, 0) ? 0 : 1;
                 const currentNeighborCost = costSoFar.get(neighbor);
                 const newCost = movementCost + (currentCost !== undefined ? currentCost : 0);
-                //print(neighbor.position.X, neighbor.position.Y, neighbor.position.Z, currentNeighborCost, newCost);
                 if (currentNeighborCost === undefined || newCost < currentNeighborCost) {
                     costSoFar.set(neighbor, newCost);
-                    const priority = newCost + neighbor.position.Y;
+                    const priority = newCost + neighbor.position.Y + neighbor.physicsData.load;
                     frontier.insert(neighbor, priority);
+                    if (!cameFrom.get(neighbor)) {
+                        explored.push(neighbor);
+                    }
                     cameFrom.set(neighbor, current);
                 }
             });
@@ -243,17 +249,7 @@ export class VoxelPhysicsHelper {
             return [ true, cameFrom, destination ];
         }
         else {
-            return [ false, [] ];
+            return [ false, explored ];
         }
-    }
-
-    static printVoxelPosition(voxel: Voxel) {
-        if (VoxelPhysicsHelper.SETUP_DONE)
-            if (voxel && voxel.position) {
-                print(voxel.position.X, voxel.position.Y, voxel.position.Z);
-            }
-            else {
-                print('nil');
-            }
     }
 }
