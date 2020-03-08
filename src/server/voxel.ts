@@ -134,8 +134,6 @@ export interface VoxelPhysicsData {
 }
 
 export class VoxelPhysicsHelper {
-    public static SETUP_DONE = false;
-
     public static readonly MAX_LOAD = 10;
 
     public static getInitialVoxelPhysicsData(voxel: Voxel): VoxelPhysicsData {
