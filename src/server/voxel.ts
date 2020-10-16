@@ -1,8 +1,10 @@
 import { PriorityQueue } from 'shared/priority-queue';
 
+const Workspace = game.GetService('Workspace');
+
 const voxelFolder = new Instance('Folder');
 voxelFolder.Name = 'Voxels';
-voxelFolder.Parent = game.Workspace;
+voxelFolder.Parent = Workspace;
 voxelFolder.ChildRemoved.Connect((removedVoxel) => {
     if (removedVoxel.IsA('BasePart')) {
         const voxel = Voxel.getVoxel(removedVoxel.Position);
@@ -84,7 +86,7 @@ export class Voxel {
         TweenService.Create(clonedPart, new TweenInfo(6, Enum.EasingStyle.Linear, Enum.EasingDirection.In), {
             Transparency: 1
         }).Play();
-        clonedPart.Parent = game.Workspace;
+        clonedPart.Parent = Workspace;
         coroutine.wrap(() => {
             wait(6);
             clonedPart.Destroy();
@@ -137,9 +139,9 @@ export class VoxelPhysicsHelper {
     public static readonly MAX_LOAD = 10;
 
     public static getInitialVoxelPhysicsData(voxel: Voxel): VoxelPhysicsData {
-        const raycastResult = !!game.Workspace.FindPartOnRayWithWhitelist(
+        const raycastResult = !!Workspace.FindPartOnRayWithWhitelist(
             new Ray(voxel.position, new Vector3(0, -(Voxel.SIZE / 2 + 0.1), 0)),
-            [ game.Workspace.FindFirstChild('Baseplate') as BasePart ]
+            [ Workspace.FindFirstChild('Baseplate') as BasePart ]
         )[0];
         return {
             baseLevel: raycastResult,
